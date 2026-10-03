@@ -26,6 +26,9 @@ NER_MODEL_NAME = "dslim/bert-base-NER"
 QA_MODEL_NAME = "deepset/bert-base-cased-squad2"
 EMBEDDING_MODEL_NAME = "bert-base-uncased"
 
+# NER guesses below this score are mostly noise, such as "and" tagged as an organisation
+MIN_ENTITY_SCORE = 0.6
+
 CLAUSE_DESCRIPTIONS = {
     "Confidentiality": "confidential information must be protected and not disclosed",
     "Payment": "invoice payment fee price and payment deadline obligation",
@@ -113,7 +116,8 @@ class BertDocumentAssistant:
             "token-classification",
             model=ner_model,
             tokenizer=ner_tokenizer,
-            aggregation_strategy="simple",
+            # "first" labels whole words, so a word is never split into fragments such as "R" + "##udra"
+            aggregation_strategy="first",
             device=self.device,
         )
 
@@ -148,7 +152,10 @@ class BertDocumentAssistant:
                     continue
                 value = entity["word"].strip()
                 key = (value.lower(), raw_label)
-                if value and key not in seen:
+                # Skip single characters, leftover word pieces and low-confidence guesses
+                if len(value) < 2 or value.startswith("##") or entity["score"] < MIN_ENTITY_SCORE:
+                    continue
+                if key not in seen:
                     findings.append(Finding(value, label_map[raw_label], float(entity["score"])))
                     seen.add(key)
         return findings
@@ -178,10 +185,14 @@ class BertDocumentAssistant:
     @staticmethod
     def redact_text(text: str, findings: Iterable[Finding]) -> str:
         """Create a preview with each detected value replaced by its category."""
-        output = text
-        for finding in sorted(findings, key=lambda item: len(item.text), reverse=True):
-            output = re.sub(re.escape(finding.text), f"[{finding.category.upper()}]", output, flags=re.IGNORECASE)
-        return output
+        # One pass over the text with the longest values first, matching whole words only,
+        # so a short value never replaces part of a longer one or part of an inserted tag.
+        categories = {finding.text.lower(): finding.category.upper() for finding in findings}
+        if not categories:
+            return text
+        alternatives = "|".join(re.escape(value) for value in sorted(categories, key=len, reverse=True))
+        pattern = re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
+        return pattern.sub(lambda match: f"[{categories[match.group().lower()]}]", text)
 
     def answer_question(self, question: str, text: str) -> dict[str, object] | None:
         """Answer a question by selecting the strongest extractive QA answer."""
