@@ -1,7 +1,7 @@
 [project]
-name = "ut1"
+name = "bert-document-review"
 version = "0.1.0"
-description = "Add your description here"
+description = "Document review assistant built from BERT encoders: NER, extractive QA and embeddings"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
